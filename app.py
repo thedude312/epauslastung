@@ -9,10 +9,10 @@ def plot_auslastung():
     st.title('EP-Auslastung')
 
     jahr_ausgang = dt.date.today().year
-    liste_jahr = [jahr_ausgang, jahr_ausgang +1]    
-    jahr = st.selectbox(label='Jahr', options=liste_jahr)
+    liste_jahr = [jahr_ausgang, jahr_ausgang +1]   
 
-    datum = pd.to_datetime(st.date_input(label='Datum', min_value=f'{jahr}-01-01', max_value=f'{jahr}-12-31'))
+    jahr = st.selectbox(label='Jahr', options=liste_jahr)
+    datum = st.date_input(label='Datum', min_value=f'{jahr}-01-01', max_value=f'{jahr}-12-31')
 
     @st.cache_data
     def lade_alle_ferien(jahr, art):
@@ -38,8 +38,9 @@ def plot_auslastung():
             except:
                 df['gebiet'] = land
             df['land'] = land
+
             df = df[['startDate', 'endDate', 'type', 'nationwide', 'ferien', 'land', 'gebiet']]
-            df[['startDate', 'endDate']] = df[['startDate', 'endDate']].apply(pd.to_datetime)
+            df[['startDate', 'endDate']] = df[['startDate', 'endDate']].apply(pd.to_datetime).apply(lambda x: x.dt.date)
             df['art'] = art
 
             return df
@@ -57,6 +58,7 @@ def plot_auslastung():
         df_feiertage = lade_alle_ferien(jahr, 'Public')
 
         df = pd.concat([df_ferien, df_feiertage])
+        df['name'] = df['ferien']
         df['ferien'] = np.where(df['art'] == 'School', 1, 0)
         df['feiertag'] = np.where(df['art'] == 'Public', 1, 0)
 
@@ -73,16 +75,46 @@ def plot_auslastung():
 
     df_feiertage_gesamt = merge_alle_ferien()
 
-    def lade_ferien(df_ferien, datum):
-        df = df_ferien.copy()
-        df = df.loc[(df['startDate'] <= datum) & (df['endDate'] >= datum)]
+    def lade_uebersicht(df_feiertage_gesamt, datum):
+        df = df_feiertage_gesamt.copy()
+        maske = (df['startDate'] <= datum) & (df['endDate'] >= datum)
+        df = df.loc[maske]
         df = df[['land', 'gebiet', 'ferien', 'feiertag']]
 
         df = df.groupby('land')[['ferien', 'feiertag']].sum().reset_index()
 
-        return df
+        return df, maske
+    df_ferien_anzeige, maske = lade_uebersicht(df_feiertage_gesamt, datum)
 
-    df_ferien_anzeige = lade_ferien(df_feiertage_gesamt, datum)
+    def lade_details(df_feiertage_gesamt):
+        df = df_feiertage_gesamt.copy()
+        df = (
+            df
+            .loc[maske]
+            [['land', 'gebiet', 'name']])
+        return df
+    df_details = lade_details(df_feiertage_gesamt)
+
+    def plot_dichte(datum, jahr, df_feiertage_gesamt):
+        monat = datum.month
+        start_datum = dt.date(jahr, monat, 1)
+
+        liste_daten = pd.date_range(start=start_datum, end=start_datum + pd.offsets.MonthEnd(0)).tolist()
+
+        df_verlauf = pd.DataFrame({'datum': liste_daten, 'ferien': 0, 'feiertag': 0})
+        df_verlauf['datum'] = df_verlauf['datum'].dt.date
+
+        for _, row in df_feiertage_gesamt.iterrows():
+            maske = (df_verlauf['datum'] >= row['startDate']) & (df_verlauf['datum'] <= row['endDate']) & (row['art'] == 'Public')
+            df_verlauf.loc[maske, 'feiertag'] += row['feiertag']
+            maske = (df_verlauf['datum'] >= row['startDate']) & (df_verlauf['datum'] <= row['endDate']) & (row['art'] == 'School')
+            df_verlauf.loc[maske, 'ferien'] += row['ferien']
+
+        fig = px.bar(df_verlauf, x='datum', y=['ferien', 'feiertag'], title='Dichte')
+        fig.update_layout(showlegend=False)
+
+        st.plotly_chart(fig, theme='streamlit')
+    plot_dichte(datum, jahr, df_feiertage_gesamt)
 
     if len(df_ferien_anzeige) == 0:
         st.success('Super, dies ist ein großartiger Tag für den EP. Die Welt gehört uns!', icon=':material/celebration:')
@@ -99,8 +131,19 @@ def plot_auslastung():
             label='Feiertage (Gebiete)',
             help='Ggf. kann eine 1 auch das gesamte Land widerspiegeln'
         ),
+        'name': st.column_config.Column(
+            label='Name'
+        ),
+        'gebiet': st.column_config.Column(
+            label='Region'
+        ),
     }
 
-    st.dataframe(df_ferien_anzeige, hide_index=False, column_config=column_config_ep)
+    st.subheader('Übersicht')
+    st.dataframe(df_ferien_anzeige, hide_index=True, column_config=column_config_ep)
+
+    st.subheader('Details')
+    st.dataframe(df_details, hide_index=True, column_config=column_config_ep)
+
 
 plot_auslastung()
